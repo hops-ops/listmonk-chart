@@ -1,0 +1,103 @@
+{{- if and .Values.postgres.enabled .Values.postgres.migration.enabled (not .Release.IsInstall) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "listmonk.fullname" . }}-postgres-migration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      name: postgres-migration
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "listmonk.fullname" . }}-migration
+      containers:
+      - name: migrate
+        image: {{ .Values.postgres.migration.image | default "bitnamilegacy/kubectl:1.29.9" }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          STS="{{ include "listmonk.postgresStatefulSetName" . }}"
+          NS="{{ .Release.Namespace }}"
+          SELECTOR="app.kubernetes.io/name=${STS},app.kubernetes.io/instance={{ .Release.Name }}"
+
+          echo "Checking if StatefulSet migration is needed..."
+          if ! kubectl get statefulset "$STS" -n "$NS" >/dev/null 2>&1; then
+            echo "No existing StatefulSet found, skipping migration."
+            exit 0
+          fi
+
+          echo "StatefulSet exists; scaling down (preserving PVCs)..."
+          kubectl scale statefulset "$STS" -n "$NS" --replicas=0
+
+          echo "Waiting for pods to terminate..."
+          if kubectl get pods -n "$NS" -l "$SELECTOR" -o name 2>/dev/null | head -1 | grep -q .; then
+            kubectl wait --for=delete pod -l "$SELECTOR" -n "$NS" --timeout=120s || true
+          fi
+
+          echo "Deleting StatefulSet (--cascade=orphan, PVCs preserved)..."
+          kubectl delete statefulset "$STS" -n "$NS" --cascade=orphan
+
+          echo "Migration complete. StatefulSet will be recreated by Helm."
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "listmonk.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "listmonk.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["apps"]
+  resources: ["statefulsets"]
+  resourceNames: ["{{ include "listmonk.postgresStatefulSetName" . }}"]
+  verbs: ["get", "list", "delete", "patch"]
+- apiGroups: ["apps"]
+  resources: ["statefulsets/scale"]
+  resourceNames: ["{{ include "listmonk.postgresStatefulSetName" . }}"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "listmonk.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "listmonk.fullname" . }}-migration
+subjects:
+- kind: ServiceAccount
+  name: {{ include "listmonk.fullname" . }}-migration
+  namespace: {{ .Release.Namespace }}
+{{- end }}

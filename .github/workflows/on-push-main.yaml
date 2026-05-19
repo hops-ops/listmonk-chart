@@ -1,0 +1,37 @@
+name: on-push-main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/on-push-main.yaml"
+      - ".github/workflows/on-version-tagged.yaml"
+      - "Chart.yaml"
+      - "values.yaml"
+      - "templates/**"
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  quality:
+    uses: unbounded-tech/workflows-helm/.github/workflows/quality.yaml@main
+    with:
+      paths: '["."]'
+
+  version-and-tag:
+    name: Version and Tag
+    needs:
+      - quality
+    uses: unbounded-tech/workflow-vnext-tag/.github/workflows/workflow.yaml@v1.21.0
+    secrets:
+      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+    with:
+      useDeployKey: true

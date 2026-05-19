@@ -1,0 +1,78 @@
+name: on-version-tagged
+
+# Fires on tags pushed by the vnext version-and-tag workflow.
+# Two jobs:
+#   1. release  — create a GitHub release with auto-generated notes
+#   2. publish  — package the chart at the tagged version and deploy to
+#                 gh-pages so the helm repo index includes the new
+#                 version alongside prior ones.
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: unbounded-tech/workflow-simple-release/.github/workflows/workflow.yaml@v2.1.1
+    with:
+      tag: ${{ github.ref_name }}
+      name: ${{ github.ref_name }}
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Chart.yaml version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Publishing chart at version $VERSION"
+          sed -i.bak "s/^version: .*/version: ${VERSION}/" Chart.yaml
+          rm -f Chart.yaml.bak
+          grep -E '^(version|appVersion):' Chart.yaml
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Package chart
+        run: |
+          mkdir -p ./charts-out
+          helm package . --destination ./charts-out
+
+      - name: Fetch existing index for merge
+        run: |
+          if curl -sSL --fail https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.yaml -o /tmp/existing-index.yaml; then
+            echo "Existing index found; will merge."
+          else
+            echo "No existing index — first release."
+            : > /tmp/existing-index.yaml
+          fi
+
+      - name: Generate index (merged)
+        run: |
+          REPO_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          if [ -s /tmp/existing-index.yaml ]; then
+            helm repo index ./charts-out --url "$REPO_URL" --merge /tmp/existing-index.yaml
+          else
+            helm repo index ./charts-out --url "$REPO_URL"
+          fi
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./charts-out
+          keep_files: true

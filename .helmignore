@@ -1,0 +1,7 @@
+# Patterns to ignore when building packages.
+# Do NOT ignore README.md - Artifact Hub displays it from the chart package.
+*.sh
+.git/
+.gitignore
+.DS_Store
+artifacthub-repo.yml

@@ -1,0 +1,233 @@
+## Listmonk Configuration
+
+replicaCount: 1
+
+image:
+  repository: listmonk/listmonk
+  pullPolicy: IfNotPresent
+  tag: "v6.0.0"
+
+imagePullSecrets: []
+# CRITICAL: Do not change after first install when using embedded Postgres - they affect StatefulSet/PVC naming.
+# Changing nameOverride changes the StatefulSet name; a new PVC will be created and your existing data PVC will be orphaned.
+nameOverride: ""
+# Changing fullnameOverride can affect resource names; keep stable across upgrades to avoid orphaned PVCs.
+fullnameOverride: ""
+
+## Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+## Pod Security
+podAnnotations: {}
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  runAsUser: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+
+## Service Configuration
+service:
+  type: ClusterIP
+  port: 9000
+
+## Ingress Configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: example-tls
+      hosts:
+        - example.com
+
+## Resource Limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+## Autoscaling (disabled by default)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+## Pod Disruption Budget (improves stability during voluntary disruptions)
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 0  # Allow rolling updates; set to 1 to avoid eviction of single replica
+
+## Node Selection
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+## Probes
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 9000
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 9000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Startup probe: gives app time to start before liveness kills it (avoids crash loops on slow cold start)
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 9000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 30  # 30 * 5s = 150s max before liveness takes over
+
+## Admin Configuration
+admin:
+  username: admin
+  password: "change-me"
+
+## App Configuration
+app:
+  address: "0.0.0.0:9000"
+  lang: "en"
+
+## Database Configuration
+database:
+  # When using embedded postgres (postgres.enabled), leave as listmonk-postgres.
+  # If using nameOverride/fullnameOverride with external Postgres, set this to your DB host or the Postgres service name.
+  host: "listmonk-postgres"
+  port: 5432
+  name: listmonk
+  user: listmonk
+  sslMode: disable
+  maxOpen: 25
+  maxIdle: 25
+  maxLifetime: "300s"
+  # Password will be fetched from existing secret if provided
+  existingSecret: ""
+  passwordKey: "password"
+
+## Embedded Postgres (no operator required)
+postgres:
+  enabled: true
+  image:
+    repository: "postgres"
+    tag: "15"
+  # Pre-upgrade migration: scale down & delete StatefulSet (--cascade=orphan) so Helm can recreate it.
+  # Set enabled: false to skip (e.g. if the hook fails); then run manual steps from README and retry upgrade.
+  migration:
+    enabled: true
+    image: bitnamilegacy/kubectl:1.29.9  # versioned tag from Bitnami Legacy (bitnami/kubectl:1.30 not found)
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1  # Protect single Postgres replica from voluntary eviction
+  # Wait for Postgres to accept connections before starting Listmonk (avoids crash loops)
+  waitForDatabase: true
+  storage:
+    size: 4Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+
+## SMTP Configuration
+smtp:
+  enabled: false
+  # Create secret with SMTP credentials
+  # If existingSecret is set, credentials below are ignored
+  existingSecret: ""
+  host: "smtp.example.com"
+  port: 587
+  username: "user@example.com"
+  password: "change-me"
+  from: "noreply@example.com"
+  authProtocol: "login"
+  tlsEnabled: true
+  tlsSkipVerify: false
+  maxConns: 10
+  idleTimeout: "15s"
+  waitTimeout: "5s"
+  maxMsgRetries: 2
+  helloHostname: ""
+
+## Database Initialization
+init:
+  enabled: true
+  # Run database initialization as pre-install hook
+  runAsHook: false
+
+## OIDC Configuration (Listmonk v4.1+ native OIDC, settings keyed under
+## `security.oidc.*`).
+##
+## When enabled, the chart renders a `[security.oidc]` block in config.toml
+## with provider URL + provider name. client_id and client_secret are NOT
+## written to config.toml — they are projected as env via extraEnvFrom (see
+## below) from a separately-managed Secret (e.g. an ExternalSecret target).
+##
+## Listmonk env-var override format (periods in koanf key replaced by `__`):
+##   LISTMONK_security__oidc__client_id
+##   LISTMONK_security__oidc__client_secret
+##
+## So the projected Secret must carry keys exactly named:
+##   LISTMONK_security__oidc__client_id
+##   LISTMONK_security__oidc__client_secret
+##
+## The Listmonk OAuth redirect URI is `https://<host>/auth/oidc`; configure
+## the same value on the upstream OIDC provider (Zitadel, Keycloak, etc.).
+oidc:
+  enabled: false
+  # OIDC issuer/provider base URL (e.g. https://auth.ops.com.ai)
+  providerUrl: ""
+  # Display name shown on the Listmonk sign-in page
+  providerName: "OIDC"
+
+## extraEnvFrom: appended envFrom sources on the Listmonk container.
+## Use for SMTP + OIDC secrets sourced from ExternalSecret / sealed-secrets.
+##
+## Example:
+##   extraEnvFrom:
+##     - secretRef:
+##         name: listmonk-smtp
+##     - secretRef:
+##         name: listmonk-oidc-client
+extraEnvFrom: []
+
+## extraEnv: explicit env entries appended after the chart's defaults.
+## Useful for app-level overrides like LISTMONK_security__enable_oidc.
+##
+## Example:
+##   extraEnv:
+##     - name: LISTMONK_security__custom_setting
+##       value: "true"
+extraEnv: []

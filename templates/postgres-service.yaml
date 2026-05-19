@@ -1,0 +1,18 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: listmonk-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+  selector:
+    app.kubernetes.io/name: {{ include "listmonk.postgresStatefulSetName" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

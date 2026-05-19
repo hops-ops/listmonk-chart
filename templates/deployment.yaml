@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "listmonk.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "listmonk.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "listmonk.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and .Values.postgres.enabled .Values.postgres.waitForDatabase }}
+      initContainers:
+      - name: wait-for-db
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: IfNotPresent
+        command: ["pg_isready", "-h", {{ .Values.database.host | quote }}, "-p", {{ .Values.database.port | quote }}, "-U", {{ .Values.database.user | quote }}]
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "listmonk.dbSecretName" . }}
+              key: {{ .Values.database.passwordKey }}
+      {{- end }}
+      serviceAccountName: {{ include "listmonk.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Chart.Name }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        volumeMounts:
+        - name: listmonk-config
+          mountPath: /listmonk/config.toml
+          subPath: config.toml
+        ports:
+        - name: http
+          containerPort: 9000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: {{ include "listmonk.fullname" . }}
+        {{- /*
+          extraEnvFrom: list of envFrom sources merged after the chart's
+          own ConfigMap. Use this to project additional Secret/ConfigMap
+          keys into the Listmonk Pod — typically SMTP credentials and
+          OIDC client_id/client_secret pulled in from ExternalSecret.
+
+          Example:
+            extraEnvFrom:
+              - secretRef:
+                  name: listmonk-smtp
+              - secretRef:
+                  name: listmonk-oidc-client
+        */}}
+        {{- with .Values.extraEnvFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        env:
+        # Note: Listmonk requires db password as env var, not mounted file
+        # kube-linter warning suppressed - application requirement
+        - name: LISTMONK_db__password
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "listmonk.dbSecretName" . }}
+              key: {{ .Values.database.passwordKey }}
+        {{- /*
+          extraEnv: list of explicit env entries (name + value or valueFrom)
+          appended after the chart's defaults. Useful for app-level
+          overrides like LISTMONK_security__enable_oidc.
+        */}}
+        {{- with .Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.livenessProbe.enabled }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.livenessProbe.httpGet.path }}
+            port: {{ .Values.livenessProbe.httpGet.port }}
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+        {{- end }}
+        {{- if .Values.readinessProbe.enabled }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.readinessProbe.httpGet.path }}
+            port: {{ .Values.readinessProbe.httpGet.port }}
+          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+        {{- end }}
+        {{- if .Values.startupProbe.enabled }}
+        startupProbe:
+          httpGet:
+            path: {{ .Values.startupProbe.httpGet.path }}
+            port: {{ .Values.startupProbe.httpGet.port }}
+          initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+      - name: listmonk-config
+        configMap:
+          name: {{ include "listmonk.fullname" . }}
+          items:
+          - key: config.toml
+            path: config.toml
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

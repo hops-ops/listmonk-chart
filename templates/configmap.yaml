@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "listmonk.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+data:
+  LISTMONK_app__address: {{ .Values.app.address | quote }}
+  LISTMONK_app__lang: {{ .Values.app.lang | quote }}
+  LISTMONK_db__host: {{ .Values.database.host | quote }}
+  LISTMONK_db__port: {{ .Values.database.port | quote }}
+  LISTMONK_db__user: {{ .Values.database.user | quote }}
+  LISTMONK_db__database: {{ .Values.database.name | quote }}
+  LISTMONK_db__ssl_mode: {{ .Values.database.sslMode | quote }}
+  LISTMONK_db__max_open: {{ .Values.database.maxOpen | quote }}
+  LISTMONK_db__max_idle: {{ .Values.database.maxIdle | quote }}
+  LISTMONK_db__max_lifetime: {{ .Values.database.maxLifetime | quote }}
+  {{- if .Values.oidc.enabled }}
+  LISTMONK_security__oidc__enabled: "true"
+  LISTMONK_security__oidc__provider_url: {{ .Values.oidc.providerUrl | quote }}
+  LISTMONK_security__oidc__provider_name: {{ .Values.oidc.providerName | quote }}
+  {{- end }}
+  config.toml: |
+    [app]
+    address = {{ .Values.app.address | quote }}
+    lang = {{ .Values.app.lang | quote }}
+
+    [db]
+    host = {{ .Values.database.host | quote }}
+    port = {{ .Values.database.port }}
+    user = {{ .Values.database.user | quote }}
+    database = {{ .Values.database.name | quote }}
+    ssl_mode = {{ .Values.database.sslMode | quote }}
+    max_open = {{ .Values.database.maxOpen }}
+    max_idle = {{ .Values.database.maxIdle }}
+    max_lifetime = {{ .Values.database.maxLifetime | quote }}
+    params = ""
+    {{- if .Values.oidc.enabled }}
+
+    [security.oidc]
+    enabled = true
+    provider_url = {{ .Values.oidc.providerUrl | quote }}
+    provider_name = {{ .Values.oidc.providerName | quote }}
+    {{- end }}

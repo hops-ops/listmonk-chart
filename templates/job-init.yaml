@@ -1,0 +1,119 @@
+{{- if .Values.init.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "listmonk.fullname" . }}-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.init.runAsHook }}
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+    {{- end }}
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 600
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "listmonk.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+      - name: db-check
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          # Skip init if database already has tables (idempotent - never overwrite existing data)
+          if psql -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'" | grep -qv "^0$"; then
+            echo "Database already has tables, skipping init"
+            echo "skip" > /shared/skip
+          fi
+        env:
+        - name: PGHOST
+          value: {{ .Values.database.host | quote }}
+        - name: PGPORT
+          value: {{ .Values.database.port | quote }}
+        - name: PGUSER
+          value: {{ .Values.database.user | quote }}
+        - name: PGDATABASE
+          value: {{ .Values.database.name | quote }}
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "listmonk.dbSecretName" . }}
+              key: {{ .Values.database.passwordKey }}
+        volumeMounts:
+        - name: init-flag
+          mountPath: /shared
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: listmonk-init
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        volumeMounts:
+        - name: listmonk-config
+          mountPath: /listmonk/config.toml
+          subPath: config.toml
+        command:
+        - /bin/sh
+        - -c
+        - |
+          if [ -f /shared/skip ]; then
+            echo "DB already initialized, skipping install"
+            exit 0
+          fi
+          exec /listmonk/listmonk --install --yes
+        env:
+        - name: LISTMONK_ADMIN_USER
+          value: {{ .Values.admin.username | quote }}
+        - name: LISTMONK_ADMIN_PASSWORD
+          value: {{ .Values.admin.password | quote }}
+        - name: LISTMONK_app__address
+          value: {{ .Values.app.address | quote }}
+        - name: LISTMONK_app__lang
+          value: {{ .Values.app.lang | quote }}
+        - name: LISTMONK_db__host
+          value: {{ .Values.database.host | quote }}
+        - name: LISTMONK_db__port
+          value: {{ .Values.database.port | quote }}
+        - name: LISTMONK_db__user
+          value: {{ .Values.database.user | quote }}
+        - name: LISTMONK_db__database
+          value: {{ .Values.database.name | quote }}
+        - name: LISTMONK_db__ssl_mode
+          value: {{ .Values.database.sslMode | quote }}
+        - name: LISTMONK_db__max_open
+          value: {{ .Values.database.maxOpen | quote }}
+        - name: LISTMONK_db__max_idle
+          value: {{ .Values.database.maxIdle | quote }}
+        - name: LISTMONK_db__max_lifetime
+          value: {{ .Values.database.maxLifetime | quote }}
+        # Note: Listmonk requires db password as env var, not mounted file
+        # kube-linter warning suppressed - application requirement
+        - name: LISTMONK_db__password
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "listmonk.dbSecretName" . }}
+              key: {{ .Values.database.passwordKey }}
+      volumes:
+      - name: init-flag
+        emptyDir: {}
+      - name: listmonk-config
+        configMap:
+          name: {{ include "listmonk.fullname" . }}
+          items:
+          - key: config.toml
+            path: config.toml
+{{- end }}

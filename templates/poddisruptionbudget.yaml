@@ -1,0 +1,32 @@
+{{- if and .Values.postgres.enabled .Values.postgres.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "listmonk.postgresStatefulSetName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.postgres.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "listmonk.postgresStatefulSetName" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+{{- end }}
+{{- end }}
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "listmonk.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "listmonk.selectorLabels" . | nindent 6 }}
+{{- end }}

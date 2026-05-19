@@ -1,0 +1,45 @@
+✓ Listmonk has been installed successfully!
+
+{{- if not .Release.IsInstall }}
+
+⚠️  UPGRADE NOTICE: If you lost data after upgrade, check for orphaned PVCs:
+  kubectl get pvc -n {{ .Release.Namespace }}
+
+To recover, see: https://github.com/redzumi/listmonk-chart#data-recovery
+
+{{- end }}
+
+📧 Application Details:
+  URL: https://{{ (index .Values.ingress.hosts 0).host }}
+  Admin User: {{ .Values.admin.username }}
+  Admin Password: {{ .Values.admin.password }}
+
+🔍 Check Status:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "listmonk.name" . }}
+
+📋 View Logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "listmonk.name" . }} -f
+
+{{- if .Values.smtp.enabled }}
+
+📨 SMTP Configuration:
+  Configure SMTP manually via Admin UI:
+    https://{{ (index .Values.ingress.hosts 0).host }}/admin/settings/smtp
+
+  SMTP credentials are stored in secret: {{ include "listmonk.smtpSecretName" . }}
+  You can retrieve them with:
+    kubectl get secret -n {{ .Release.Namespace }} {{ include "listmonk.smtpSecretName" . }} -o yaml
+{{- end }}
+
+{{- if .Values.init.enabled }}
+
+🗄️  Database Initialization:
+  Database was initialized via pre-install hook.
+  Check the init job logs:
+    kubectl logs -n {{ .Release.Namespace }} job/{{ include "listmonk.fullname" . }}-init
+{{- end }}
+
+⏳ Note: It may take a few moments for the application to be fully ready.
+   If you see "bad gateway", wait 30 seconds and refresh.
+
+🎉 Happy mailing!

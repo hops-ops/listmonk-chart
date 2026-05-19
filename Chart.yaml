@@ -1,0 +1,38 @@
+apiVersion: v2
+name: listmonk
+description: |
+  Listmonk (listmonk.app) — self-hosted newsletter and mailing-list manager —
+  packaged for Kubernetes. Fork of redzumi/listmonk-chart that adds
+  extraEnv / extraEnvFrom hooks on the Listmonk Deployment (so SMTP and OIDC
+  credentials can be projected via env from ExternalSecret-managed Secrets)
+  and exposes a [security] OIDC block in the rendered config.toml.
+type: application
+version: 1.0.0
+appVersion: "v6.0.0"
+keywords:
+  - listmonk
+  - newsletter
+  - email
+  - mailing-list
+home: https://listmonk.app
+sources:
+  - https://github.com/knadh/listmonk
+  - https://github.com/redzumi/listmonk-chart
+  - https://github.com/hops-ops/listmonk-chart
+maintainers:
+  - name: Patrick Lee Scott
+    email: pat@patscott.io
+  - name: redzumi
+    url: https://github.com/redzumi
+annotations:
+  artifacthub.io/category: streaming-messaging
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Listmonk
+      url: https://listmonk.app
+    - name: Chart source
+      url: https://github.com/hops-ops/listmonk-chart
+    - name: Upstream chart
+      url: https://github.com/redzumi/listmonk-chart
+    - name: App source
+      url: https://github.com/knadh/listmonk

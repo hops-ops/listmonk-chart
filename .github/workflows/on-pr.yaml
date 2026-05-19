@@ -1,0 +1,19 @@
+name: on-pr
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: unbounded-tech/workflows-helm/.github/workflows/quality.yaml@main
+    with:
+      paths: '["."]'

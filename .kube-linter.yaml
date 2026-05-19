@@ -1,0 +1,12 @@
+checks:
+  # Disable specific checks that don't apply or are false positives
+  doNotAutoAddDefaults: false
+  exclude:
+    # Deployments don't need explicit restart policy (Always is default)
+    - "restart-policy"
+
+  # Allow reading database password from env var
+  # Listmonk requires LISTMONK_db__password as environment variable
+  addAllBuiltIn: true
+
+customChecks: []
