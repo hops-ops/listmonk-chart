@@ -70,11 +70,15 @@ spec:
         - /bin/sh
         - -c
         - |
+          # --idempotent: never overwrite existing schema/data on re-run.
+          # The preceding db-check initContainer's /shared/skip flag is no
+          # longer load-bearing for safety, but we keep the fast-path skip
+          # to avoid the listmonk binary even firing up when not needed.
           if [ -f /shared/skip ]; then
             echo "DB already initialized, skipping install"
             exit 0
           fi
-          exec /listmonk/listmonk --install --yes
+          exec /listmonk/listmonk --install --idempotent --yes
         env:
         - name: LISTMONK_ADMIN_USER
           value: {{ .Values.admin.username | quote }}
