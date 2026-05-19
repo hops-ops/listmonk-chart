@@ -15,6 +15,47 @@ entries:
           url: https://github.com/knadh/listmonk
     apiVersion: v2
     appVersion: v6.0.0
+    created: "2026-05-19T20:51:05.249751696Z"
+    description: 'Listmonk (listmonk.app) — self-hosted newsletter and mailing-list
+      manager — packaged for Kubernetes. Fork of redzumi/listmonk-chart that adds
+      extraEnv / extraEnvFrom hooks on the Listmonk Deployment (so SMTP and OIDC credentials
+      can be projected via env from ExternalSecret-managed Secrets) and exposes a
+      [security] OIDC block in the rendered config.toml. '
+    digest: 6856d515cb1cd84c93c9b62b91b05eca0d3fbaadf42e65ad852a4f2c3e608c0e
+    home: https://listmonk.app
+    keywords:
+    - listmonk
+    - newsletter
+    - email
+    - mailing-list
+    maintainers:
+    - email: pat@patscott.io
+      name: Patrick Lee Scott
+    - name: redzumi
+      url: https://github.com/redzumi
+    name: listmonk
+    sources:
+    - https://github.com/knadh/listmonk
+    - https://github.com/redzumi/listmonk-chart
+    - https://github.com/hops-ops/listmonk-chart
+    type: application
+    urls:
+    - https://hops-ops.github.io/listmonk-chart/listmonk-0.1.1.tgz
+    version: 0.1.1
+  - annotations:
+      artifacthub.io/category: streaming-messaging
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: Listmonk
+          url: https://listmonk.app
+        - name: Chart source
+          url: https://github.com/hops-ops/listmonk-chart
+        - name: Upstream chart
+          url: https://github.com/redzumi/listmonk-chart
+        - name: App source
+          url: https://github.com/knadh/listmonk
+    apiVersion: v2
+    appVersion: v6.0.0
     created: "2026-05-19T20:18:18.438526274Z"
     description: 'Listmonk (listmonk.app) — self-hosted newsletter and mailing-list
       manager — packaged for Kubernetes. Fork of redzumi/listmonk-chart that adds
@@ -42,4 +83,4 @@ entries:
     urls:
     - https://hops-ops.github.io/listmonk-chart/listmonk-0.1.0.tgz
     version: 0.1.0
-generated: "2026-05-19T20:18:18.437391731Z"
+generated: "2026-05-19T20:51:05.248678726Z"
