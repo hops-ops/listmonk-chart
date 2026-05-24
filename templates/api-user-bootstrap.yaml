@@ -1,0 +1,330 @@
+{{- if .Values.adminAuth.createApiUser }}
+# ---------------------------------------------------------------------
+# Admin API user bootstrap (opt-in; gated on .Values.adminAuth.createApiUser)
+#
+# Runs as a post-install,post-upgrade Helm hook. By the time this hook
+# fires, all main chart resources (Postgres StatefulSet, schema init
+# Job, ConfigMap, Listmonk Deployment) have been loaded by Helm. The
+# hook then:
+#   1. prepare-token: reuse the chart-managed Secret's token if present,
+#      else generate a fresh one
+#   2. write-db: wait for the listmonk schema to exist (the regular
+#      schema init Job is racing with us and may need a minute), then
+#      idempotently INSERT/UPDATE the api user row
+#   3. write-secret: kubectl apply --server-side the Secret carrying
+#      username + token in the install namespace
+#   4. restart-listmonk: kubectl rollout restart the Listmonk Deployment
+#      so the apiUsers cache reloads with the new row (the cache is
+#      populated only at startup — see
+#      reference_listmonk_apiusers_cache_at_startup)
+#
+# Why post-install instead of pre-install:
+#   pre-install hooks run BEFORE any main resources are applied. That
+#   means the chart-managed Postgres StatefulSet and config.toml
+#   ConfigMap don't exist yet, so a pre-install hook trying to either
+#   connect to the DB or mount the config would deadlock. post-install
+#   defers the bootstrap until everything is in place, at the cost of
+#   one Listmonk pod restart on first install / upgrade.
+#
+# Idempotency contract (see values.yaml comments for the full table):
+#   - read existing Secret if present; otherwise generate a fresh token
+#   - INSERT ... ON CONFLICT (username) DO UPDATE so partial-state
+#     recovery converges; Secret is the source of truth, DB is synced
+#   - kubectl apply --server-side on the Secret so co-managing
+#     controllers (ESO PushSecret on the consuming stack) don't
+#     oscillate
+# ---------------------------------------------------------------------
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-user-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-user-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+# Read + write the chart-managed credential Secret. resourceNames
+# scopes get/patch/update; create can't be name-scoped but the only
+# Secret the controller creates is the one named below.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "patch", "update"]
+  resourceNames:
+  - {{ include "listmonk.providerCredsSecretName" . | quote }}
+# K8s API requires unscoped create to be allowed for create itself.
+# We split it from the resourceName-bound rule above.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+# rollout restart the Listmonk Deployment so apiUsers cache reloads.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
+  resourceNames:
+  - {{ include "listmonk.fullname" . | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-user-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+subjects:
+- kind: ServiceAccount
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "listmonk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api-user-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 900
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "listmonk.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api-user-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "listmonk.fullname" . }}-api-user-bootstrap
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      # --- prepare-token ----------------------------------------------
+      - name: prepare-token
+        image: {{ .Values.adminAuth.kubectlImage | quote }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          SECRET_NAME={{ include "listmonk.providerCredsSecretName" . | quote }}
+          NS={{ .Release.Namespace | quote }}
+
+          if kubectl --namespace="$NS" get secret "$SECRET_NAME" >/dev/null 2>&1; then
+            EXISTING=$(kubectl --namespace="$NS" get secret "$SECRET_NAME" -o jsonpath='{.data.token}' | base64 -d)
+            if [ -z "$EXISTING" ]; then
+              echo "✗ existing Secret $SECRET_NAME has empty token; aborting" >&2
+              exit 1
+            fi
+            printf '%s' "$EXISTING" > /shared/token
+            echo "reuse" > /shared/mode
+            echo "✓ found existing Secret $SECRET_NAME; reusing token"
+          else
+            # Two concatenated UUIDs → 64 hex chars after stripping dashes
+            # (~244 bits of entropy). /proc/sys/kernel/random/uuid is
+            # available on every linux kernel; no openssl/xxd needed.
+            U1=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
+            U2=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
+            printf '%s' "${U1}${U2}" > /shared/token
+            echo "new" > /shared/mode
+            echo "✓ generated new token for $SECRET_NAME ($(wc -c < /shared/token) bytes)"
+          fi
+
+          if ! [ -s /shared/token ]; then
+            echo "✗ token preparation produced an empty file" >&2
+            exit 1
+          fi
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      # --- write-db ---------------------------------------------------
+      # Polls postgres + schema readiness. We're a post-install hook
+      # racing the schema init Job; expect to wait up to ~2 minutes
+      # before users table appears on a cold install.
+      - name: write-db
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          TOKEN=$(cat /shared/token)
+          USERNAME={{ .Values.adminAuth.apiUserName | quote }}
+          EMAIL_DEFAULT="${USERNAME}@listmonk.local"
+          EMAIL={{ default "" .Values.adminAuth.apiUserEmail | quote }}
+          if [ -z "$EMAIL" ]; then EMAIL="$EMAIL_DEFAULT"; fi
+
+          # Phase 1: wait for postgres to accept connections.
+          for i in $(seq 1 60); do
+            if pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
+              echo "✓ postgres reachable at $PGHOST:$PGPORT"
+              break
+            fi
+            echo "waiting for postgres ($i/60)..."
+            sleep 2
+          done
+
+          # Phase 2: wait for users table to exist (schema init Job
+          # completes asynchronously alongside this hook). 60 * 5s = 5min.
+          for i in $(seq 1 60); do
+            COUNT=$(psql -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='users';" 2>/dev/null || echo 0)
+            if [ "$COUNT" != "0" ]; then
+              echo "✓ users table found"
+              break
+            fi
+            echo "waiting for users table ($i/60)..."
+            sleep 5
+          done
+          if [ "${COUNT:-0}" = "0" ]; then
+            echo "✗ users table never appeared after 5min; schema init Job may have failed" >&2
+            exit 1
+          fi
+
+          # Phase 3: idempotent reconcile. ON CONFLICT clause restricts
+          # to api-typed users so a human admin is never accidentally
+          # converted to api.
+          PGPASSWORD="$PGPASSWORD" psql -v ON_ERROR_STOP=1 \
+              -v username="$USERNAME" \
+              -v email="$EMAIL" \
+              -v token="$TOKEN" <<'SQL'
+            INSERT INTO users (
+              username, email, name, type, user_role_id, status, password, password_login
+            ) VALUES (
+              :'username', :'email', :'username', 'api'::user_type, 1,
+              'enabled'::user_status, :'token', false
+            )
+            ON CONFLICT (username) DO UPDATE
+              SET password = EXCLUDED.password,
+                  email    = EXCLUDED.email,
+                  status   = EXCLUDED.status
+              WHERE users.type = 'api';
+          SQL
+          echo "✓ users row reconciled for $USERNAME"
+        env:
+        - name: PGHOST
+          value: {{ .Values.database.host | quote }}
+        - name: PGPORT
+          value: {{ .Values.database.port | quote }}
+        - name: PGUSER
+          value: {{ .Values.database.user | quote }}
+        - name: PGDATABASE
+          value: {{ .Values.database.name | quote }}
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "listmonk.dbSecretName" . }}
+              key: {{ .Values.database.passwordKey }}
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      # --- write-secret -----------------------------------------------
+      - name: write-secret
+        image: {{ .Values.adminAuth.kubectlImage | quote }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          SECRET_NAME={{ include "listmonk.providerCredsSecretName" . | quote }}
+          NS={{ .Release.Namespace | quote }}
+          USERNAME={{ .Values.adminAuth.apiUserName | quote }}
+          TOKEN=$(cat /shared/token)
+
+          cat <<EOF | kubectl --namespace="$NS" apply --server-side \
+              --field-manager=listmonk-chart -f -
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: $SECRET_NAME
+            labels:
+              app.kubernetes.io/managed-by: listmonk-chart
+              app.kubernetes.io/component: api-user-bootstrap
+              listmonk.hops.ops.com.ai/api-user: $USERNAME
+          type: Opaque
+          stringData:
+            username: $USERNAME
+            token: $TOKEN
+          EOF
+          echo "✓ Secret $SECRET_NAME reconciled (server-side apply)"
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      # --- restart-listmonk (main container) --------------------------
+      # Forces the Listmonk Deployment to roll its pods so the apiUsers
+      # cache reloads with the new row. Skipped on the very first install
+      # where the Deployment was created moments ago (rollout restart on
+      # a never-rolled-out Deployment may produce a transient error);
+      # detect by checking if the Deployment has any ready replicas.
+      containers:
+      - name: restart-listmonk
+        image: {{ .Values.adminAuth.kubectlImage | quote }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          DEPLOY={{ include "listmonk.fullname" . | quote }}
+          NS={{ .Release.Namespace | quote }}
+
+          # If the Deployment doesn't exist yet (shouldn't happen on a
+          # post-install hook, but be defensive), nothing to restart.
+          if ! kubectl --namespace="$NS" get deployment "$DEPLOY" >/dev/null 2>&1; then
+            echo "Deployment $DEPLOY not found; skipping restart (was the post-install hook fired before main resources?)"
+            exit 0
+          fi
+
+          READY=$(kubectl --namespace="$NS" get deployment "$DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
+          if [ "${READY:-0}" = "0" ]; then
+            # Fresh install: Listmonk is still starting up, its
+            # CacheAPIUsers hasn't loaded yet (or just loaded with the
+            # api user already present in DB, depending on timing).
+            # Restart is unnecessary in the steady-state happy case, but
+            # we restart anyway so any partial cache state is purged.
+            echo "no ready replicas yet (cold install); rolling out to be safe"
+          else
+            echo "Deployment has $READY ready replica(s); rolling out to refresh apiUsers cache"
+          fi
+          kubectl --namespace="$NS" rollout restart deployment "$DEPLOY"
+          # Don't wait for rollout — helm has its own --wait semantics
+          # on the parent install. Exiting here releases the hook.
+          echo "✓ rollout restart issued for deployment/$DEPLOY"
+      volumes:
+      - name: shared
+        emptyDir: {}
+{{- end }}

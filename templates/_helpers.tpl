@@ -88,3 +88,17 @@ Do not change nameOverride after first install or PVC will be orphaned.
 {{- define "listmonk.postgresStatefulSetName" -}}
 {{- printf "%s-postgres" (include "listmonk.name" .) }}
 {{- end }}
+
+{{/*
+Secret name written by the api-user-bootstrap hook. Carries the
+crossplane-provider api credential keys: username + token.
+Override via .Values.adminAuth.secretName when integrating with
+externally-managed Secret stores.
+*/}}
+{{- define "listmonk.providerCredsSecretName" -}}
+{{- if .Values.adminAuth.secretName }}
+{{- .Values.adminAuth.secretName }}
+{{- else }}
+{{- printf "%s-provider-creds" (include "listmonk.fullname" .) }}
+{{- end }}
+{{- end }}

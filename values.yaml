@@ -187,6 +187,62 @@ init:
   # Run database initialization as pre-install hook
   runAsHook: false
 
+## Admin API user bootstrap (opt-in; default off — stock-chart-safe)
+##
+## When enabled, a Helm pre-install,pre-upgrade Hook idempotently mints a
+## type=api Listmonk User in the database and writes its credentials to a
+## Kubernetes Secret in the install namespace. The Secret keys are
+## `username` + `token` — compatible with terraform-provider-listmonk's
+## Basic-Auth (and the upjet-generated Crossplane provider-listmonk).
+##
+## Implementation: post-install,post-upgrade Helm hook.
+##   Pre-install was the natural fit but blocked on chicken-and-egg
+##   ordering with the chart-managed Postgres StatefulSet and the
+##   config.toml ConfigMap (both are main resources, created AFTER
+##   pre-install hooks complete — so a pre-install hook can't reach
+##   them).
+##   Post-install side-steps both issues by deferring the bootstrap
+##   until everything is in place, then rollout-restarting the Listmonk
+##   Deployment so apiUsers cache reloads with the newly-INSERTed row.
+##   Adds ~30-60s to first-install / upgrade walltime (the restart) in
+##   exchange for working with both embedded and external Postgres.
+##
+## Hook ordering:
+##   weight 0 — schema init (`listmonk --install`) — auto-promoted to a
+##              Hook when this feature is enabled, regardless of
+##              init.runAsHook setting
+##   weight 1 — this api-user-bootstrap Hook
+## Both complete before Helm releases the main Listmonk Deployment,
+## so listmonk's apiUsers cache picks up the new user at startup. No
+## pod restart required.
+##
+## Idempotency contract:
+##   - Secret + DB row both exist → no-op
+##   - Secret exists, DB row missing → re-INSERT DB row with the
+##     Secret's token (recovery from partial state)
+##   - Secret missing, DB row exists → regenerate token, UPDATE DB row,
+##     write Secret (token rotation path; trigger by deleting the
+##     Secret + helm upgrade)
+##   - Neither → generate token, INSERT DB row, write Secret (first
+##     install)
+##
+## Stock-chart-safe: gated on createApiUser. Default false. Non-hops
+## users see no behavior change.
+adminAuth:
+  createApiUser: false
+  apiUserName: "crossplane-provider"
+  # apiUserEmail: defaults to "<apiUserName>@listmonk.local". The
+  # Listmonk users table requires a unique non-null email; this value
+  # doesn't need to be deliverable.
+  apiUserEmail: ""
+  # Secret name to write/read in the install namespace. Defaults to
+  # `<release>-provider-creds`. Override when integrating with an
+  # externally-managed Secret store.
+  secretName: ""
+  # Bootstrap Job image with kubectl. Reuses the same image the postgres
+  # migration job pulls so no new image dependency is introduced.
+  kubectlImage: "bitnamilegacy/kubectl:1.29.9"
+
 ## OIDC Configuration (Listmonk v4.1+ native OIDC, settings keyed under
 ## `security.oidc.*`).
 ##
