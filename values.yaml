@@ -189,11 +189,13 @@ init:
 
 ## Admin API user bootstrap (opt-in; default off — stock-chart-safe)
 ##
-## When enabled, a Helm pre-install,pre-upgrade Hook idempotently mints a
-## type=api Listmonk User in the database and writes its credentials to a
-## Kubernetes Secret in the install namespace. The Secret keys are
-## `username` + `token` — compatible with terraform-provider-listmonk's
-## Basic-Auth (and the upjet-generated Crossplane provider-listmonk).
+## When enabled, a Helm `post-install,post-upgrade` Hook idempotently
+## mints a `type=api` Listmonk User in the database and writes its
+## credentials to a Kubernetes Secret in the install namespace, then
+## rollout-restarts the Listmonk Deployment so its in-memory apiUsers
+## cache reloads with the new row. The Secret keys are `username` +
+## `token` — compatible with terraform-provider-listmonk's Basic-Auth
+## (and the upjet-generated Crossplane provider-listmonk).
 ##
 ## Implementation: post-install,post-upgrade Helm hook.
 ##   Pre-install was the natural fit but blocked on chicken-and-egg
@@ -202,22 +204,27 @@ init:
 ##   pre-install hooks complete — so a pre-install hook can't reach
 ##   them).
 ##   Post-install side-steps both issues by deferring the bootstrap
-##   until everything is in place, then rollout-restarting the Listmonk
-##   Deployment so apiUsers cache reloads with the newly-INSERTed row.
-##   Adds ~30-60s to first-install / upgrade walltime (the restart) in
-##   exchange for working with both embedded and external Postgres.
+##   until everything is in place. The trade-off is one rollout-restart
+##   of the Listmonk Deployment (~30-60s extra wall-time on first
+##   install / upgrade) so the apiUsers cache reloads with the
+##   newly-INSERTed row — Listmonk's auth.CacheAPIUsers loads only once
+##   at pod startup, never on a timer or notify.
 ##
-## Hook ordering:
-##   weight 0 — schema init (`listmonk --install`) — auto-promoted to a
-##              Hook when this feature is enabled, regardless of
-##              init.runAsHook setting
-##   weight 1 — this api-user-bootstrap Hook
-## Both complete before Helm releases the main Listmonk Deployment,
-## so listmonk's apiUsers cache picks up the new user at startup. No
-## pod restart required.
+## Hook resources (all with `helm.sh/hook: post-install,post-upgrade`):
+##   weight 0 — ServiceAccount + Role + RoleBinding
+##              (delete-policy: before-hook-creation,hook-succeeded)
+##   weight 1 — the api-user-bootstrap Job, four containers:
+##                prepare-token (read existing Secret OR generate fresh)
+##                write-db      (idempotent INSERT … ON CONFLICT)
+##                write-secret  (kubectl apply --server-side)
+##                restart-listmonk (kubectl rollout restart deployment)
+## The schema-init Job (`templates/job-init.yaml`) is a regular main
+## resource, NOT a hook. It runs concurrently with these post-install
+## hooks; the write-db container polls for the users table before
+## attempting any INSERT.
 ##
 ## Idempotency contract:
-##   - Secret + DB row both exist → no-op
+##   - Secret + DB row both exist with matching token → no-op
 ##   - Secret exists, DB row missing → re-INSERT DB row with the
 ##     Secret's token (recovery from partial state)
 ##   - Secret missing, DB row exists → regenerate token, UPDATE DB row,
@@ -225,8 +232,10 @@ init:
 ##     Secret + helm upgrade)
 ##   - Neither → generate token, INSERT DB row, write Secret (first
 ##     install)
+##   - Row exists with a non-api `type` → fail fast (refuse to mutate
+##     so an interactive admin is never accidentally clobbered)
 ##
-## Stock-chart-safe: gated on createApiUser. Default false. Non-hops
+## Stock-chart-safe: gated on createApiUser. Default false. Non-platform
 ## users see no behavior change.
 adminAuth:
   createApiUser: false
@@ -236,7 +245,10 @@ adminAuth:
   # doesn't need to be deliverable.
   apiUserEmail: ""
   # Secret name to write/read in the install namespace. Defaults to
-  # `<release>-provider-creds`. Override when integrating with an
+  # `<release>-provider-creds` (using .Release.Name directly so the
+  # default name is predictable for downstream composition consumers,
+  # not affected by the listmonk.fullname template's release-name-
+  # contains-chart-name branching). Override when integrating with an
   # externally-managed Secret store.
   secretName: ""
   # Bootstrap Job image with kubectl. Reuses the same image the postgres

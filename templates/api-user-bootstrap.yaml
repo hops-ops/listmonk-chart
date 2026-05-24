@@ -214,9 +214,29 @@ spec:
             exit 1
           fi
 
-          # Phase 3: idempotent reconcile. ON CONFLICT clause restricts
-          # to api-typed users so a human admin is never accidentally
-          # converted to api.
+          # Phase 3: type-collision guard. Postgres' INSERT ... ON
+          # CONFLICT DO UPDATE ... WHERE silently NO-OPS the UPDATE
+          # when the predicate is false. If we just ran the UPSERT
+          # below against a row where type != 'api', the DB would
+          # keep the existing (wrong-type) row, but write-secret +
+          # restart-listmonk would still write a Secret carrying a
+          # token that doesn't match any api-user. Subsequent
+          # Basic-Auth would fail mysteriously. Detect + fail fast.
+          EXISTING_TYPE=$(psql -tAc "SELECT type FROM users WHERE username = '$USERNAME';" 2>/dev/null | tr -d '[:space:]' || true)
+          if [ -n "$EXISTING_TYPE" ] && [ "$EXISTING_TYPE" != "api" ]; then
+            echo "✗ user '$USERNAME' already exists with type='$EXISTING_TYPE'; refusing to mutate" >&2
+            echo "  (api-user-bootstrap only manages type=api users so that an interactive admin" >&2
+            echo "   is never accidentally converted, and so that the Secret + DB stay in sync.)" >&2
+            echo "  Resolution: delete the existing user manually, or set adminAuth.apiUserName" >&2
+            echo "  to a different value, then re-run." >&2
+            exit 1
+          fi
+
+          # Phase 4: idempotent reconcile. With the type-collision
+          # guard above, the WHERE clause here is belt + suspenders —
+          # if the row exists it's already type='api'. Keeping the
+          # WHERE so future maintainers reading this don't accidentally
+          # drop the constraint.
           PGPASSWORD="$PGPASSWORD" psql -v ON_ERROR_STOP=1 \
               -v username="$USERNAME" \
               -v email="$EMAIL" \

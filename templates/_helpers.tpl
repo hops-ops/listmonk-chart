@@ -92,6 +92,15 @@ Do not change nameOverride after first install or PVC will be orphaned.
 {{/*
 Secret name written by the api-user-bootstrap hook. Carries the
 crossplane-provider api credential keys: username + token.
+
+Default is `<release>-provider-creds` (using .Release.Name, NOT
+listmonk.fullname). Unlike dbSecretName / smtpSecretName which follow
+the chart's fullname convention, this Secret is the contract surface
+for downstream consumers (EmailMarketingStack composition, externally
+authored ProviderConfigs); a predictable `<release>-suffix` shape is
+easier for those consumers to compose against than the fullname
+template's branching logic.
+
 Override via .Values.adminAuth.secretName when integrating with
 externally-managed Secret stores.
 */}}
@@ -99,6 +108,6 @@ externally-managed Secret stores.
 {{- if .Values.adminAuth.secretName }}
 {{- .Values.adminAuth.secretName }}
 {{- else }}
-{{- printf "%s-provider-creds" (include "listmonk.fullname" .) }}
+{{- printf "%s-provider-creds" .Release.Name }}
 {{- end }}
 {{- end }}
