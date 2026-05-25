@@ -138,7 +138,7 @@ postgres:
   enabled: true
   image:
     repository: "postgres"
-    tag: "15"
+    tag: "18"
   # Pre-upgrade migration: scale down & delete StatefulSet (--cascade=orphan) so Helm can recreate it.
   # Set enabled: false to skip (e.g. if the hook fails); then run manual steps from README and retry upgrade.
   migration:
