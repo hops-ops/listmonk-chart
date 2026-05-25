@@ -5,7 +5,7 @@ replicaCount: 1
 image:
   repository: listmonk/listmonk
   pullPolicy: IfNotPresent
-  tag: "v6.0.0"
+  tag: "v6.1.0"
 
 imagePullSecrets: []
 # CRITICAL: Do not change after first install when using embedded Postgres - they affect StatefulSet/PVC naming.
