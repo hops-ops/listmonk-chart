@@ -222,7 +222,24 @@ spec:
           # restart-listmonk would still write a Secret carrying a
           # token that doesn't match any api-user. Subsequent
           # Basic-Auth would fail mysteriously. Detect + fail fast.
-          EXISTING_TYPE=$(psql -tAc "SELECT type FROM users WHERE username = '$USERNAME';" 2>/dev/null | tr -d '[:space:]' || true)
+          #
+          # Uses psql `-v username=` + `:'username'` substitution so
+          # the value is parameterized at the psql client (handles
+          # quoting / special chars safely) — same pattern as the
+          # Phase 4 UPSERT below. Plain "WHERE username = '$USERNAME'"
+          # shell-interpolation would break on apostrophes and is
+          # unsafe even if the chart consumer is trusted.
+          #
+          # Important: piped via stdin (-f -), NOT -c "..." — psql -c
+          # does NOT process `:'variable'` substitution (only -f /
+          # interactive input does, per psql(1)). Earlier draft of this
+          # guard used -c and the substitution silently failed → SQL
+          # error → stderr suppressed → empty EXISTING_TYPE → guard
+          # passed even when it shouldn't.
+          EXISTING_TYPE=$(echo "SELECT type FROM users WHERE username = :'username';" \
+              | PGPASSWORD="$PGPASSWORD" psql -tA -v ON_ERROR_STOP=1 \
+                -v username="$USERNAME" -f - \
+                2>/dev/null | tr -d '[:space:]' || true)
           if [ -n "$EXISTING_TYPE" ] && [ "$EXISTING_TYPE" != "api" ]; then
             echo "✗ user '$USERNAME' already exists with type='$EXISTING_TYPE'; refusing to mutate" >&2
             echo "  (api-user-bootstrap only manages type=api users so that an interactive admin" >&2
