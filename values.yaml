@@ -143,7 +143,7 @@ postgres:
   # Set enabled: false to skip (e.g. if the hook fails); then run manual steps from README and retry upgrade.
   migration:
     enabled: true
-    image: bitnamilegacy/kubectl:1.29.9  # versioned tag from Bitnami Legacy (bitnami/kubectl:1.30 not found)
+    image: bitnamilegacy/kubectl:1.33.4  # versioned tag from Bitnami Legacy (bitnami/kubectl:1.30 not found)
   podDisruptionBudget:
     enabled: true
     minAvailable: 1  # Protect single Postgres replica from voluntary eviction
@@ -253,7 +253,7 @@ adminAuth:
   secretName: ""
   # Bootstrap Job image with kubectl. Reuses the same image the postgres
   # migration job pulls so no new image dependency is introduced.
-  kubectlImage: "bitnamilegacy/kubectl:1.29.9"
+  kubectlImage: "bitnamilegacy/kubectl:1.33.4"
 
 ## OIDC Configuration (Listmonk v4.1+ native OIDC, settings keyed under
 ## `security.oidc.*`).
